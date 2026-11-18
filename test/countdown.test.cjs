@@ -275,7 +275,8 @@ test('an occupied email is red below the email field, receives focus and clears 
     assert.ok(page.email.compareDocumentPosition(error) & page.dom.window.Node.DOCUMENT_POSITION_FOLLOWING);
     assert.equal(page.dom.window.getComputedStyle(error).color, 'rgb(255, 180, 171)');
     assert.equal(page.dom.window.getComputedStyle(error).backgroundColor, 'rgba(0, 0, 0, 0)');
-    assert.equal(parseFloat(page.dom.window.getComputedStyle(error).padding), 0);
+    // JSDOM may serialize an unset zero padding as either "" or "0".
+    assert.equal(parseFloat(page.dom.window.getComputedStyle(error).padding || '0'), 0);
     assert.equal(page.dom.window.getComputedStyle(error).fontSize, '13px');
     assert.equal(page.email.getAttribute('aria-describedby'), error.id);
     assert.equal(page.email.getAttribute('aria-invalid'), 'true');
