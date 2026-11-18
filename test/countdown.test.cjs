@@ -65,6 +65,7 @@ function browser(remainingMs, extra = {}) {
     code: doc.getElementById('verification-code'),
     hint: doc.querySelector('[data-mail-hint]'),
     error: doc.querySelector('[data-verification-error]'),
+    errors: Object.fromEntries(Array.from(doc.querySelectorAll('[data-field-error]')).map(element => [element.dataset.fieldError, element])),
     tick(ms) { now += ms; for (const callback of [...timers.values()]) callback(); },
     advance(ms) { now += ms; },
     activeTimers: () => timers.size,
@@ -93,7 +94,7 @@ test('the initial page has email, adjacent code/send controls, and no inbox hint
     assert.equal(page.code.closest('.verification-code-row'), page.button.parentElement);
     assert.ok(page.code.closest('label.inverse.material.textbox'));
     assert.ok(page.email.closest('label.inverse.material.textbox'));
-    assert.equal(page.error.hidden, false);
+    assert.equal(page.errors.mail.hidden, false);
   } finally { page.dom.window.close(); }
 });
 
@@ -227,10 +228,10 @@ test('network and server failures are inline and leave the form usable for retry
     assert.equal(page.error.textContent, '请求失败，请稍后重试。');
     assert.equal(page.button.disabled, false);
     assert.equal(page.email.readOnly, false);
-    page.reply({ ...sent({ retryAfterMs: 0 }), error: '发送频率过高，请稍后再试。' }, false);
+    page.reply({ ...sent({ retryAfterMs: 0 }), errorField: 'send', error: '发送频率过高，请稍后再试。' }, false);
     page.submit(page.button);
     await flush();
-    assert.equal(page.error.textContent, '发送频率过高，请稍后再试。');
+    assert.equal(page.errors.code.textContent, '发送频率过高，请稍后再试。');
     assert.equal(page.verify.disabled, false);
   } finally { page.dom.window.close(); }
 });
@@ -239,17 +240,101 @@ test('wrong verification stays inline and updates remaining attempts', async () 
   const page = browser(15000);
   try {
     page.code.value = '000000';
-    page.reply({ ...sent({ remaining: 2, retryAfterMs: 10000 }), error: '验证码错误。' }, false);
+    page.reply({ ...sent({ remaining: 2, retryAfterMs: 10000 }), errorField: 'code', error: '验证码错误。' }, false);
     page.submit(page.verify);
     await flush();
     assert.equal(page.requests[0].url, 'https://oj.example.com/verification_register');
     assert.equal(page.requests[0].options.body.get('__verificationCode'), '000000');
     assert.equal(page.requests[0].options.body.get('__challenge'), 'abc');
-    assert.equal(page.error.textContent, '验证码错误。');
+    assert.equal(page.errors.code.textContent, '验证码错误。');
+    assert.equal(page.code.getAttribute('aria-invalid'), 'true');
+    assert.equal(page.hint.hidden, true);
+    assert.equal(page.dom.window.document.activeElement, page.code);
     assert.equal(page.dom.window.document.querySelector('[data-attempts]').textContent, '剩余尝试次数：2');
     assert.equal(page.button.textContent, '10 秒后重发');
     assert.equal(page.verify.disabled, false);
+    page.code.value = '012345';
+    page.code.dispatchEvent(new page.dom.window.Event('input'));
+    assert.equal(page.errors.code.hidden, true);
+    assert.equal(page.code.hasAttribute('aria-invalid'), false);
+    assert.equal(page.hint.hidden, false);
   } finally { page.dom.window.close(); }
+});
+
+test('an occupied email is red below the email field, receives focus and clears when edited', async () => {
+  const page = browser(0, { hasCode: false, mail: '', nonce: '', remaining: 0 });
+  try {
+    page.edit('taken@example.com');
+    page.reply({ hasCode: false, mail: 'taken@example.com', remaining: 0, errorField: 'mail', error: '用户 taken@example.com 已存在。' }, false);
+    page.submit(page.button);
+    await flush();
+    const error = page.errors.mail;
+    assert.equal(error.hidden, false);
+    assert.equal(error.textContent, '用户 taken@example.com 已存在。');
+    assert.ok(page.email.closest('.verification-field').contains(error));
+    assert.ok(page.email.compareDocumentPosition(error) & page.dom.window.Node.DOCUMENT_POSITION_FOLLOWING);
+    assert.equal(page.dom.window.getComputedStyle(error).color, 'rgb(255, 180, 171)');
+    assert.equal(page.dom.window.getComputedStyle(error).backgroundColor, 'rgba(0, 0, 0, 0)');
+    assert.equal(parseFloat(page.dom.window.getComputedStyle(error).padding), 0);
+    assert.equal(page.dom.window.getComputedStyle(error).fontSize, '13px');
+    assert.equal(page.email.getAttribute('aria-describedby'), error.id);
+    assert.equal(page.email.getAttribute('aria-invalid'), 'true');
+    assert.equal(page.code.hasAttribute('aria-invalid'), false);
+    assert.equal(page.error.hidden, true);
+    assert.equal(page.dom.window.document.activeElement, page.email);
+    page.edit('new@example.com');
+    assert.equal(error.hidden, true);
+    assert.equal(page.email.hasAttribute('aria-invalid'), false);
+  } finally { page.dom.window.close(); }
+});
+
+test('empty or malformed email and malformed codes use localized field messages before any request', () => {
+  const page = browser(0, { hasCode: false, mail: '', nonce: '', remaining: 0 });
+  try {
+    page.submit(page.button);
+    assert.equal(page.errors.mail.textContent, '请输入邮箱地址。');
+    page.edit('invalid-email');
+    page.submit(page.button);
+    assert.equal(page.errors.mail.textContent, '请输入有效的邮箱地址。');
+    assert.equal(page.requests.length, 0);
+  } finally { page.dom.window.close(); }
+  const ready = browser(10000);
+  try {
+    ready.code.value = '123';
+    ready.submit(ready.verify);
+    assert.equal(ready.errors.code.textContent, '请输入发送到邮箱的 6 位数字验证码。');
+    assert.equal(ready.requests.length, 0);
+    assert.equal(ready.code.disabled, false);
+  } finally { ready.dom.window.close(); }
+});
+
+test('send limits appear below the code/send row without marking the entered code invalid', async () => {
+  const page = browser(0);
+  try {
+    page.reply({ ...sent({ retryAfterMs: 12000 }), errorField: 'send', error: '请稍后再获取验证码。' }, false);
+    page.submit(page.button);
+    await flush();
+    assert.equal(page.errors.code.hidden, false);
+    assert.equal(page.button.getAttribute('aria-describedby'), page.errors.code.id);
+    assert.equal(page.code.hasAttribute('aria-invalid'), false);
+    assert.equal(page.button.textContent, '12 秒后重发');
+    assert.equal(page.button.disabled, true);
+  } finally { page.dom.window.close(); }
+});
+
+test('server-rendered field errors have one visible location and preserve HTML validation fallback', () => {
+  for (const field of ['mail', 'password', 'code', 'send', 'form']) {
+    const dom = new JSDOM(render(5000, { needsPassword: true, error: '测试错误', errorField: field }));
+    try {
+      const doc = dom.window.document;
+      const visible = Array.from(doc.querySelectorAll('.verification-error')).filter(element => !element.hidden);
+      assert.equal(visible.length, 1);
+      assert.equal(visible[0].textContent, '测试错误');
+      assert.equal(visible[0].dataset.fieldError || 'form', field === 'send' ? 'code' : field);
+      assert.equal(doc.querySelector('form').noValidate, false);
+      if (field === 'mail' || field === 'code') assert.equal(doc.querySelector(`[name="${field === 'mail' ? 'mail' : '__verificationCode'}"]`).getAttribute('aria-invalid'), 'true');
+    } finally { dom.window.close(); }
+  }
 });
 
 test('a control named action cannot replace the verification request URL in real browsers', async () => {
@@ -259,12 +344,12 @@ test('a control named action cannot replace the verification request URL in real
     // jsdom does not implement this collision, so reproduce it explicitly.
     Object.defineProperty(page.form, 'action', { value: page.button, configurable: true });
     page.code.value = '012345';
-    page.reply({ ...sent({ remaining: 2 }), error: '验证码错误。' }, false);
+    page.reply({ ...sent({ remaining: 2 }), errorField: 'code', error: '验证码错误。' }, false);
     page.submit(page.verify);
     await flush();
     assert.equal(page.requests[0].url, 'https://oj.example.com/verification_register');
     assert.equal(page.requests[0].options.body.get('__verificationCode'), '012345');
-    assert.equal(page.error.textContent, '验证码错误。');
+    assert.equal(page.errors.code.textContent, '验证码错误。');
   } finally { page.dom.window.close(); }
 });
 
@@ -285,7 +370,7 @@ test('exhausting three attempts locks verification while the code input stays ed
   const page = browser(1000);
   try {
     page.code.value = '000000';
-    page.reply({ ...sent({ remaining: 0, retryAfterMs: 1000 }), error: '验证码已达到尝试次数上限。' }, false);
+    page.reply({ ...sent({ remaining: 0, retryAfterMs: 1000 }), errorField: 'code', error: '验证码已达到尝试次数上限。' }, false);
     page.submit(page.verify);
     await flush();
     assert.equal(page.verify.disabled, true);
@@ -308,7 +393,7 @@ test('changing email asks for a password before the first send and clears it aft
     const password = page.form.elements.namedItem('password');
     page.submit(page.button);
     assert.equal(page.requests.length, 0);
-    assert.equal(page.error.textContent, '请输入当前密码。');
+    assert.equal(page.errors.password.textContent, '请输入当前密码。');
     password.value = 'current-password';
     page.reply(sent({ mail: 'new@example.com' }));
     page.submit(page.button);
@@ -321,7 +406,7 @@ test('changing email asks for a password before the first send and clears it aft
     assert.equal(page.form.querySelector('[data-password-field]').hidden, false);
     page.submit(page.button);
     assert.equal(page.requests.length, 1);
-    assert.equal(page.error.textContent, '请输入当前密码。');
+    assert.equal(page.errors.password.textContent, '请输入当前密码。');
   } finally { page.dom.window.close(); }
 });
 
@@ -384,7 +469,7 @@ for (const language of ['en', 'zh', 'zh_TW', 'ko']) {
       page.reply({ error: { message: 'Field {0} validation failed.', params: ['mail'] } }, false);
       page.submit(page.button);
       await flush();
-      assert.equal(page.error.textContent, dictionary['Field {0} validation failed.'].replace('{0}', dictionary.Email));
+      assert.equal(page.errors.mail.textContent, dictionary['Field {0} validation failed.'].replace('{0}', dictionary.Email));
       page.reply({ error: { message: 'Untranslated internal provider message' } }, false);
       page.submit(page.button);
       await flush();

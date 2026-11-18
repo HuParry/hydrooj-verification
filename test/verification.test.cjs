@@ -762,6 +762,8 @@ for (const language of ['en', 'zh', 'zh_TW', 'ko']) {
     p.api.UserAlreadyExistError.prototype.msg = () => 'User {0} already exists.';
     const invalid = await p.send('register', 'invalid-address', {}, true);
     assert.equal(invalid.response.body.error, dictionary['Field {0} validation failed.'].replace('{0}', dictionary.Email));
+    assert.equal(invalid.response.body.errorField, 'mail');
+    assert.equal(invalid.response.body.mail, 'invalid-address');
     p.users.set('recover@example.com', { _id: 77, uname: 'tester' });
     const session = { sudo: Date.now() };
     const registered = await p.send('register', 'signup@example.com', session, true);
@@ -785,6 +787,46 @@ for (const language of ['en', 'zh', 'zh_TW', 'ko']) {
     await verify.post();
     assert.equal(verify.response.status, 400);
     assert.equal(verify.response.body.error, dictionary['User {0} already exists.'].replace('{0}', 'signup@example.com'));
+    assert.equal(verify.response.body.errorField, 'mail');
     assert.equal(p.tokens.length, 0);
   });
 }
+
+test('all three modules identify email errors independently of their translated text', async () => {
+  const p = await plugin(() => '모든 오류에 같은 번역');
+  p.users.set('taken@example.com', { _id: 77, uname: 'taken' });
+  const requests = [
+    await p.send('register', 'taken@example.com', {}, true),
+    await p.send('lostpass', 'missing@example.com', {}, true),
+    await sendChange(p, { mail: 'taken@example.com' }),
+  ];
+  for (const h of requests) {
+    assert.equal(h.response.body.errorField, 'mail');
+    assert.equal(h.response.body.error, '모든 오류에 같은 번역');
+    assert.equal(h.response.status, 400);
+  }
+  assert.equal(p.sent.length, 0);
+});
+
+test('password and send-limit failures identify their own controls without consuming verification attempts', async () => {
+  const p = await plugin();
+  p.actors.get(42).checkPassword = async () => {
+    const error = new p.api.UserFacingError('Invalid password for user {0}.');
+    error.params = ['user42'];
+    throw error;
+  };
+  const password = await sendChange(p);
+  assert.equal(password.response.body.errorField, 'password');
+  const h = p.handler('register', {}, { mail: 'test@example.com' });
+  h.request.json = true;
+  h.limitRate = async () => {
+    const error = new p.api.UserFacingError('Too frequent operations of {0} (limit: {2} operations in {1} seconds).');
+    error.params = ['send_mail', 30, 1];
+    throw error;
+  };
+  p.hooks.get('handler/before/UserRegister#post')(h);
+  await h.post();
+  assert.equal(h.response.body.errorField, 'send');
+  assert.equal(p.sent.length, 0);
+  assert.equal(await collection.countDocuments(), 0);
+});

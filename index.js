@@ -36,7 +36,7 @@ exports.apply = async (ctx) => {
     return purpose !== 'changemail' || ownsChange(handler, doc) ? doc : null;
   }
 
-  function show(handler, purpose, doc, error) {
+  function show(handler, purpose, doc, error, errorField = 'code') {
     const retryAfterMs = doc ? Math.max(0, doc.resendAt.getTime() - Date.now()) : 0;
     handler.response.template = 'verification_code.html';
     handler.response.body = {
@@ -57,12 +57,26 @@ exports.apply = async (ctx) => {
       retryAfterMs,
       resendIntervalMs: RESEND_SECONDS * 1000,
       error: error ? handler.translate(error) : undefined,
+      errorField: error ? errorField : undefined,
     };
   }
 
   async function showSendError(handler, purpose, error) {
     if (!handler.request.json || !(error instanceof VerificationError || error instanceof UserFacingError)) throw error;
     const key = error instanceof VerificationError ? error.message : error.msg();
+    // Classify the untranslated error, never the localized display message.
+    let errorField = 'form';
+    if (key.startsWith('Field ')) {
+      const fields = { mail: 'mail', password: 'password', __verificationCode: 'code' };
+      if (Object.hasOwn(fields, error.params?.[0])) errorField = fields[error.params[0]];
+    } else if (error instanceof UserAlreadyExistError || error instanceof BlacklistedError
+      || (error instanceof UserNotFoundError && typeof error.params?.[0] === 'string')) {
+      errorField = 'mail';
+    } else if (key === 'Invalid password for user {0}.' || key === "Current password doesn't match.") {
+      errorField = 'password';
+    } else if (key.startsWith('Too frequent operations of ') || key === 'Please wait 30 seconds before requesting another code.') {
+      errorField = 'send';
+    } else if (error instanceof VerificationError) errorField = 'code';
     const labels = key.startsWith('Field ') ? {
       mail: 'Email', password: handler.session.sudoUid ? "SuperUser's Password" : 'Current Password',
       __verificationCode: 'Email verification code',
@@ -74,7 +88,8 @@ exports.apply = async (ctx) => {
       return String(Object.hasOwn(labels, value) ? handler.translate(labels[value]) : value ?? match);
     });
     const doc = await pending(handler, purpose);
-    show(handler, purpose, doc, translated);
+    show(handler, purpose, doc, translated, errorField);
+    if (!doc && typeof handler.request.body.mail === 'string') handler.response.body.mail = handler.request.body.mail.trim().slice(0, 254);
     handler.response.status = error.code || 400;
   }
 
@@ -210,7 +225,7 @@ exports.apply = async (ctx) => {
           } catch (error) {
             if (this.request.json) return showSendError(this, purpose, error);
             if (!(error instanceof VerificationError)) throw error;
-            show(this, purpose, doc, error.message);
+            show(this, purpose, doc, error.message, 'send');
             this.response.status = 400;
           }
           return;

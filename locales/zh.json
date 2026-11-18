@@ -58,5 +58,7 @@
   "Too frequent operations of {0} (limit: {2} operations in {1} seconds).": "{0} 操作过于频繁（限制：{1} 秒内 {2} 次）。",
   "Builtin login is disabled.": "内置登录已禁用。",
   "You're not logged in.": "您尚未登录。",
-  "Verification email": "验证邮件"
+  "Verification email": "验证邮件",
+  "Enter your email address.": "请输入邮箱地址。",
+  "Enter a valid email address.": "请输入有效的邮箱地址。"
 }

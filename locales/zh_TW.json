@@ -58,5 +58,7 @@
   "Too frequent operations of {0} (limit: {2} operations in {1} seconds).": "{0} 操作過於頻繁（限制：{1} 秒內 {2} 次）。",
   "Builtin login is disabled.": "內建登入已停用。",
   "You're not logged in.": "您尚未登入。",
-  "Verification email": "驗證郵件"
+  "Verification email": "驗證郵件",
+  "Enter your email address.": "請輸入電子郵件地址。",
+  "Enter a valid email address.": "請輸入有效的電子郵件地址。"
 }

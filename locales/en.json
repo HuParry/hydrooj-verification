@@ -58,5 +58,7 @@
   "Too frequent operations of {0} (limit: {2} operations in {1} seconds).": "Too frequent operations of {0} (limit: {2} operations in {1} seconds).",
   "Builtin login is disabled.": "Builtin login is disabled.",
   "You're not logged in.": "You're not logged in.",
-  "Verification email": "Verification email"
+  "Verification email": "Verification email",
+  "Enter your email address.": "Enter your email address.",
+  "Enter a valid email address.": "Enter a valid email address."
 }

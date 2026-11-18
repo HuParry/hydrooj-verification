@@ -11,6 +11,9 @@
   const sendButton = form.querySelector('[data-send-code]');
   const verifyButton = form.querySelector('[data-verify-code]');
   const errorBox = root.querySelector('[data-verification-error]');
+  const errorBoxes = { form: errorBox };
+  root.querySelectorAll('[data-field-error]').forEach(element => { errorBoxes[element.dataset.fieldError] = element; });
+  const fields = { mail: email, code, password };
   const hint = root.querySelector('[data-mail-hint]');
   const attempts = root.querySelector('[data-attempts]');
   const maxAttempts = Number(form.dataset.maxAttempts);
@@ -22,10 +25,27 @@
   };
   let busy = false;
   let timer;
+  let currentErrorField = root.dataset.errorField;
+  // Keep native constraints for HTML fallback; JavaScript shows localized
+  // messages below the fields instead of browser validation popovers.
+  form.noValidate = true;
   const sameEmail = () => email.value.trim().toLowerCase() === state.mail.toLowerCase();
-  const showError = message => {
-    errorBox.textContent = message || '';
-    errorBox.hidden = !message;
+  const showError = (message, field = 'form', focus = false) => {
+    Object.values(errorBoxes).forEach(element => { element.textContent = ''; element.hidden = true; });
+    Object.values(fields).forEach(input => input?.removeAttribute('aria-invalid'));
+    sendButton.removeAttribute('aria-describedby');
+    currentErrorField = message ? field : '';
+    if (!message) return;
+    const target = field === 'send' ? 'code' : field;
+    const box = Object.hasOwn(errorBoxes, target) ? errorBoxes[target] : errorBox;
+    box.textContent = message;
+    box.hidden = false;
+    const input = Object.hasOwn(fields, field) ? fields[field] : null;
+    if (input) {
+      input.setAttribute('aria-invalid', 'true');
+      if (focus) input.focus();
+    }
+    if (field === 'send') sendButton.setAttribute('aria-describedby', 'verification-code-error');
   };
   const update = () => {
     if (!root.isConnected) { window.clearInterval(timer); return; }
@@ -43,7 +63,7 @@
     }
     nonce.value = sent ? state.nonce : '';
     verifyButton.disabled = busy || !sent || state.remaining <= 0;
-    hint.hidden = !sent;
+    hint.hidden = !sent || !errorBoxes.code.hidden;
     attempts.hidden = !sent || state.remaining >= maxAttempts;
     attempts.textContent = attempts.dataset.label.replace('{0}', state.remaining.toString());
     if (state.deadline <= Date.now()) window.clearInterval(timer);
@@ -76,24 +96,44 @@
       return String(Object.hasOwn(labels, parameter) ? window.LOCALES[labels[parameter]] : parameter ?? match);
     });
   };
+  const errorField = data => {
+    if (['mail', 'password', 'code', 'send', 'form'].includes(data.errorField)) return data.errorField;
+    // Errors raised by native middleware may still use Hydro's JSON format.
+    if (data.error?.message?.startsWith('Field ')) {
+      const key = data.error.params?.[0];
+      const targets = { mail: 'mail', password: 'password', __verificationCode: 'code' };
+      if (Object.hasOwn(targets, key)) return targets[key];
+    }
+    return 'form';
+  };
+  const validEmail = () => {
+    if (email.checkValidity()) return true;
+    showError(root.querySelector(email.value ? '[data-error-mail-invalid]' : '[data-error-mail-empty]').textContent, 'mail', true);
+    return false;
+  };
   form.addEventListener('submit', async (event) => {
     if (event.defaultPrevented) return;
     event.preventDefault();
     if (busy) return;
     const sending = event.submitter === sendButton;
     if (sending) {
-      if (sendButton.disabled || !email.reportValidity()) return;
+      if (sendButton.disabled || !validEmail()) return;
       if (password && (!state.nonce || !sameEmail()) && !password.value) {
-        showError(root.querySelector('[data-error-password]').textContent);
-        password.focus();
+        showError(root.querySelector('[data-error-password]').textContent, 'password', true);
         return;
       }
     } else {
+      if (!validEmail()) return;
       if (!sameEmail() || !state.nonce) {
-        showError(root.querySelector('[data-error-send-first]').textContent);
+        showError(root.querySelector('[data-error-send-first]').textContent, 'send');
         return;
       }
-      if (verifyButton.disabled || !form.reportValidity()) return;
+      if (verifyButton.disabled) return;
+      if (!/^[0-9]{6}$/.test(code.value)) {
+        showError(root.querySelector('[data-error-code]').textContent, 'code', true);
+        update();
+        return;
+      }
     }
     showError('');
     const body = new URLSearchParams(new FormData(form));
@@ -106,6 +146,7 @@
     update();
     if (sending) sendButton.textContent = sendButton.dataset.sendingLabel;
     else verifyButton.textContent = verifyButton.dataset.busyLabel;
+    let succeeded = false;
     try {
       const sendUrl = new URL(sendButton.getAttribute('formaction'), window.location.href).href;
       // A control named "action" shadows form.action in real browsers.
@@ -116,7 +157,7 @@
       const data = await response.json();
       applyState(data, sending && response.ok && !data.error);
       if (!response.ok || data.error) {
-        showError(errorMessage(data));
+        showError(errorMessage(data), errorField(data), true);
         return;
       }
       if (data.url) {
@@ -127,16 +168,23 @@
         email.value = data.mail;
         if (password) password.value = '';
       }
+      succeeded = true;
     } catch (error) {
       showError(root.querySelector('[data-error-network]').textContent);
     } finally {
       busy = false;
       verifyButton.textContent = verifyButton.dataset.idleLabel;
       startTimer();
-      if (sending && !verifyButton.disabled) code.focus();
+      if (succeeded && sending && !verifyButton.disabled) code.focus();
     }
   });
   email.addEventListener('input', () => { code.value = ''; showError(''); update(); });
+  code.addEventListener('input', () => {
+    if (currentErrorField === 'code') { showError(''); update(); }
+  });
+  password?.addEventListener('input', () => {
+    if (currentErrorField === 'password') showError('');
+  });
   code.addEventListener('keydown', (event) => {
     if (event.key === 'Enter') {
       event.preventDefault();
@@ -152,5 +200,6 @@
     if (document.visibilityState === 'visible') startTimer();
   });
   startTimer();
+  if (Object.hasOwn(fields, currentErrorField)) fields[currentErrorField]?.focus();
 })();
 </script>

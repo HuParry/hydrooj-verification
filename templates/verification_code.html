@@ -11,49 +11,56 @@
 .verification-page .verification-send.button { flex: 0 0 auto; min-width: 116px; margin-bottom: 0; padding-left: 12px; padding-right: 12px; font-size: 13px; white-space: nowrap; }
 .verification-page .verification-send:disabled { opacity: .55; cursor: default; }
 .verification-page .verification-hint { margin-top: 10px; }
-.verification-page .verification-error { margin-bottom: 16px; }
+.verification-page .verification-error { margin: 8px 0 0; color: #ffb4ab; overflow-wrap: anywhere; text-align: left; }
+.verification-page .verification-form-error { margin: 0 0 12px; }
 .verification-page .verification-continue { margin-top: 8px; }
 .verification-page [hidden] { display: none !important; }
 </style>
 <div class="row"><div class="columns">
-  <div class="immersive--content immersive--center verification-page" data-verification-page>
+  <div class="immersive--content immersive--center verification-page" data-verification-page data-error-field="{{ errorField or 'form' }}">
     <h1>{{ _(title) }}</h1>
-    <p class="verification-error" role="alert" data-verification-error {% if not error %}hidden{% endif %}>{{ _(error) if error else '' }}</p>
     <form method="POST" action="{{ url(verifyRoute) }}" data-verification-form data-mail="{{ mail or '' }}" data-nonce="{{ nonce or '' }}" data-remaining="{{ remaining }}" data-max-attempts="{{ maxAttempts }}" data-retry-after-ms="{{ retryAfterMs }}" {% if useCaptcha %}captcha{% endif %}>
       {% if needsPassword %}
       <div class="verification-field" data-password-field {% if hasCode %}hidden{% endif %}>
         <label class="inverse material textbox" for="verification-password">
           {{ _(passwordLabel) }}
-          <input id="verification-password" name="password" type="password" autocomplete="current-password" maxlength="255">
+          <input id="verification-password" name="password" type="password" autocomplete="current-password" maxlength="255" aria-describedby="verification-password-error" {% if error and errorField == 'password' %}aria-invalid="true"{% endif %}>
         </label>
+        <p id="verification-password-error" class="verification-error" role="alert" aria-atomic="true" data-field-error="password" {% if not error or errorField != 'password' %}hidden{% endif %}>{{ _(error) if error and errorField == 'password' else '' }}</p>
       </div>
       {% endif %}
       <div class="verification-field">
         <label class="inverse material textbox" for="verification-email">
           {{ _(emailLabel or 'Email') }}
-          <input id="verification-email" name="mail" type="email" autocomplete="email" maxlength="254" value="{{ mail or '' }}" required {% if not hasCode %}autofocus{% endif %}>
+          <input id="verification-email" name="mail" type="email" autocomplete="email" maxlength="254" value="{{ mail or '' }}" required aria-describedby="verification-mail-error" {% if error and errorField == 'mail' %}aria-invalid="true"{% endif %} {% if not hasCode %}autofocus{% endif %}>
         </label>
+        <p id="verification-mail-error" class="verification-error" role="alert" aria-atomic="true" data-field-error="mail" {% if not error or errorField != 'mail' %}hidden{% endif %}>{{ _(error) if error and errorField == 'mail' else '' }}</p>
       </div>
       <div class="verification-field">
         <div class="verification-code-row">
           <label class="inverse material textbox" for="verification-code">
             {{ _('Email verification code') }}
-          <input id="verification-code" class="verification-code-input" name="__verificationCode" type="text" inputmode="numeric" autocomplete="one-time-code" placeholder="{{ _('6-digit code') }}" pattern="[0-9]{6}" minlength="6" maxlength="6" required aria-describedby="verification-mail-hint" {% if hasCode %}autofocus{% endif %}>
+          <input id="verification-code" class="verification-code-input" name="__verificationCode" type="text" inputmode="numeric" autocomplete="one-time-code" placeholder="{{ _('6-digit code') }}" pattern="[0-9]{6}" minlength="6" maxlength="6" required aria-describedby="verification-code-error verification-mail-hint" {% if error and errorField == 'code' %}aria-invalid="true"{% endif %} {% if hasCode %}autofocus{% endif %}>
           </label>
           <button type="submit" name="verificationAction" value="send" formaction="{{ url(entryRoute) }}" formnovalidate class="inverse rounded button verification-send" data-send-code data-get-label="{{ _('Get code') }}" data-resend-label="{{ _('Resend code') }}" data-wait-label="{{ _('Resend in {0}s') }}" data-sending-label="{{ _('Sending...') }}" {% if retryAfter > 0 %}disabled{% endif %}>{% if retryAfter > 0 %}{{ _('Resend in {0}s').format(retryAfter) }}{% elif hasCode %}{{ _('Resend code') }}{% else %}{{ _('Get code') }}{% endif %}</button>
         </div>
-        <p id="verification-mail-hint" class="verification-hint" data-mail-hint {% if not hasCode %}hidden{% endif %}>{{ _('Please check your inbox. If you cannot find the email, check your spam folder.') }}<br>{{ _('The code is valid for 10 minutes.') }}</p>
+        <p id="verification-code-error" class="verification-error" role="alert" aria-atomic="true" data-field-error="code" {% if not error or errorField not in ['code', 'send'] %}hidden{% endif %}>{{ _(error) if error and errorField in ['code', 'send'] else '' }}</p>
+        <p id="verification-mail-hint" class="verification-hint" data-mail-hint {% if not hasCode or (error and errorField in ['code', 'send']) %}hidden{% endif %}>{{ _('Please check your inbox. If you cannot find the email, check your spam folder.') }}<br>{{ _('The code is valid for 10 minutes.') }}</p>
         <p class="verification-hint" data-attempts data-label="{{ _('Remaining attempts: {0}') }}" {% if not hasCode or remaining == maxAttempts %}hidden{% endif %}>{{ _('Remaining attempts: {0}').format(remaining) }}</p>
         <noscript><p class="verification-hint"><a href="{{ url(entryRoute) }}">{{ _('Refresh this page to update the resend timer.') }}</a></p></noscript>
       </div>
       <input type="hidden" name="__challenge" value="{{ nonce or '' }}">
       {% if useCaptcha %}{{ captcha|safe }}{% endif %}
+      <p class="verification-error verification-form-error" role="alert" aria-atomic="true" data-verification-error {% if not error or (errorField and errorField != 'form') %}hidden{% endif %}>{{ _(error) if error and (not errorField or errorField == 'form') else '' }}</p>
       <button type="submit" class="inverse expanded rounded primary button verification-continue" data-verify-code data-idle-label="{{ _('Continue') }}" data-busy-label="{{ _('Verifying...') }}" {% if not hasCode or remaining == 0 %}disabled{% endif %}>{{ _('Continue') }}</button>
     </form>
     {% if backRoute %}<p class="verification-hint text-center"><a href="{{ url(backRoute) }}">{{ _('Back to security settings') }}</a></p>{% endif %}
     <span hidden data-error-send-first>{{ _('Get a verification code for this email first.') }}</span>
     <span hidden data-error-network>{{ _('The request failed. Please try again.') }}</span>
     <span hidden data-error-password>{{ _('Please enter your current password.') }}</span>
+    <span hidden data-error-mail-empty>{{ _('Enter your email address.') }}</span>
+    <span hidden data-error-mail-invalid>{{ _('Enter a valid email address.') }}</span>
+    <span hidden data-error-code>{{ _('Enter the 6-digit code sent to your email.') }}</span>
   </div>
 </div></div>
 {% endblock %}
