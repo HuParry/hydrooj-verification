@@ -21,7 +21,7 @@ git -C .hydro-source checkout 17f8ac3cef550283894279727b027b1798efee9b
 HYDRO_SOURCE_DIR="$PWD/.hydro-source" npm run check:publish --workspaces=false
 ```
 
-GitHub Actions 会自动获取上述固定版本的测试源码，无需安装或启动 Hydro。该源码目录、开发依赖、测试和工作流都不会打进 npm 发布包。
+Hydro 源码用于本地测试。该源码目录、开发依赖、测试和工作流都不会打进 npm 发布包。发布工作流沿用 hydrooj-sim 的方式：检查版本标签及发布文件，然后使用 npm 可信发布。
 
 ## 首次发布与认证
 
@@ -54,10 +54,10 @@ npm publish --access public --workspaces=false
 
 ```sh
 npm version patch --workspaces=false
-git push origin HEAD
-git push origin --tags
+git push github HEAD
+git push github --tags
 ```
 
 `npm version` 需要在干净的独立 Git 仓库中执行，会更新 `package.json` 和 `package-lock.json` 并创建版本标签。
 
-发布前，工作流会检查标签是否与包版本一致，例如 `v1.4.1` 必须对应 `1.4.1`，随后按锁文件安装依赖、运行完整测试和打包检查，全部通过后才发布。已经发布的 npm 版本不能覆盖；重试前需确认该版本是否已经发布成功。
+发布前，工作流会检查标签是否与包版本一致，例如 `v1.4.1` 必须对应 `1.4.1`，随后检查必需文件及 npm 包内容，通过后执行 `npm publish`。完整回归测试在本地运行。已经发布的 npm 版本不能覆盖；重试前需确认该版本是否已经发布成功。
