@@ -1,0 +1,62 @@
+{
+  "name": "hydrooj-verification",
+  "version": "1.4.0",
+  "description": "Six-digit email verification codes for Hydro OJ registration, password recovery and email changes",
+  "main": "index.js",
+  "type": "commonjs",
+  "license": "AGPL-3.0-or-later",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/HuParry/hydrooj-verification.git"
+  },
+  "homepage": "https://github.com/HuParry/hydrooj-verification#readme",
+  "bugs": {
+    "url": "https://github.com/HuParry/hydrooj-verification/issues"
+  },
+  "preferUnplugged": true,
+  "engines": {
+    "node": ">=22"
+  },
+  "files": [
+    "index.js",
+    "store.js",
+    "locales.js",
+    "locales/",
+    "templates/",
+    "README.md",
+    "PUBLISH.md",
+    "AUDIT.md",
+    "FLOW.md",
+    "LICENSE"
+  ],
+  "scripts": {
+    "test": "node --test test/*.test.cjs",
+    "check:publish": "npm test && npm pack --dry-run --ignore-scripts --workspaces=false"
+  },
+  "peerDependencies": {
+    "hydrooj": ">=5.1.0"
+  },
+  "peerDependenciesMeta": {
+    "hydrooj": {
+      "optional": true
+    }
+  },
+  "devDependencies": {
+    "esbuild": "0.25.2",
+    "jsdom": "26.1.0",
+    "mongodb": "^7.0.0",
+    "mongodb-memory-server": "11.0.1",
+    "nunjucks": "3.2.4"
+  },
+  "keywords": [
+    "hydrooj",
+    "plugin",
+    "email",
+    "verification",
+    "registration"
+  ],
+  "publishConfig": {
+    "access": "public",
+    "registry": "https://registry.npmjs.org/"
+  }
+}

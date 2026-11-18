@@ -1,0 +1,5 @@
+{% extends "user_lostpass_mail.html" %}
+{% block content %}
+<p>{{ _('Hello, {0}!').format(uname) }}</p>
+{% include "verification_mail_content.html" %}
+{% endblock %}

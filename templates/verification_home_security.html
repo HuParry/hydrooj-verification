@@ -1,0 +1,36 @@
+{% extends "home_security.html" %}
+{% block home_content %}
+{% if verificationPendingMail %}
+<div class="section"><div class="section__body typo">
+  <p>{{ _('A new email is waiting for verification: {0}').format(verificationPendingMail) }}</p>
+  <a class="rounded primary button" href="{{ verificationChangeUrl }}">{{ _('Continue email verification') }}</a>
+</div></div>
+{% endif %}
+{{ super() }}
+{% endblock %}
+{% block script %}
+{{ super() }}
+<style>
+.page--home_security [data-verification-change-button] {
+  white-space: nowrap;
+  width: max-content;
+}
+</style>
+<a hidden data-verification-change-mail href="{{ verificationChangeUrl }}">{{ _('Change') }}</a>
+<script>
+(() => {
+  const button = document.querySelector('[data-operation="change_mail"]');
+  const link = document.querySelector('[data-verification-change-mail]');
+  if (!button || !link) return;
+  // Keep Hydro's native button element so its layout and theme styles still apply.
+  // Remove the native dialog trigger before the delegated page handler runs.
+  button.removeAttribute('data-operation');
+  button.setAttribute('data-verification-change-button', '');
+  button.textContent = link.textContent.trim();
+  button.addEventListener('click', event => {
+    event.preventDefault();
+    window.location.assign(link.href);
+  });
+})();
+</script>
+{% endblock %}

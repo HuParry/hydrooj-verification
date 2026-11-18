@@ -1,0 +1,71 @@
+name: Publish to npm
+
+on:
+  push:
+    tags:
+      - 'v*'
+
+permissions:
+  contents: read
+
+concurrency:
+  group: npm-publish
+  cancel-in-progress: false
+
+jobs:
+  publish:
+    if: github.repository == 'HuParry/hydrooj-verification'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    permissions:
+      contents: read
+      id-token: write
+    env:
+      HYDRO_SOURCE_DIR: ${{ github.workspace }}/.hydro-source
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          persist-credentials: false
+
+      # Test against native Hydro i18n and mail templates without installing or
+      # starting Hydro. Pin the same source revision used during development.
+      - name: Check out Hydro test sources
+        uses: actions/checkout@v6
+        with:
+          repository: hydro-dev/Hydro
+          ref: 17f8ac3cef550283894279727b027b1798efee9b
+          path: .hydro-source
+          persist-credentials: false
+          sparse-checkout: |
+            packages/hydrooj/src/lib/i18n.ts
+            packages/ui-default/templates
+          sparse-checkout-cone-mode: false
+
+      - uses: actions/setup-node@v6
+        with:
+          node-version: '24'
+          registry-url: 'https://registry.npmjs.org'
+          package-manager-cache: false
+
+      - name: Install npm with trusted publishing support
+        run: npm install --global npm@11
+
+      - name: Check release version
+        env:
+          RELEASE_TAG: ${{ github.ref_name }}
+        run: |
+          node <<'NODE'
+          const assert = require('node:assert/strict');
+          const { name, version } = require('./package.json');
+          assert.equal(name, 'hydrooj-verification');
+          assert.equal(process.env.RELEASE_TAG, `v${version}`, 'Tag must match package.json version');
+          NODE
+
+      - name: Install dependencies
+        run: npm ci --workspaces=false
+
+      - name: Test and check package
+        run: npm run check:publish --workspaces=false
+
+      - name: Publish with npm trusted publishing
+        run: npm publish --access public --workspaces=false

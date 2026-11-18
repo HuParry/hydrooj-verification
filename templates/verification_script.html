@@ -1,0 +1,156 @@
+<script>
+(() => {
+  const root = document.querySelector('[data-verification-page]');
+  if (!root || !window.fetch) return;
+  const form = root.querySelector('[data-verification-form]');
+  const email = form.elements.namedItem('mail');
+  const code = form.elements.namedItem('__verificationCode');
+  const password = form.elements.namedItem('password');
+  const passwordField = form.querySelector('[data-password-field]');
+  const nonce = form.elements.namedItem('__challenge');
+  const sendButton = form.querySelector('[data-send-code]');
+  const verifyButton = form.querySelector('[data-verify-code]');
+  const errorBox = root.querySelector('[data-verification-error]');
+  const hint = root.querySelector('[data-mail-hint]');
+  const attempts = root.querySelector('[data-attempts]');
+  const maxAttempts = Number(form.dataset.maxAttempts);
+  let state = {
+    mail: form.dataset.mail,
+    nonce: form.dataset.nonce,
+    remaining: Number(form.dataset.remaining),
+    deadline: Date.now() + (Number(form.dataset.retryAfterMs) || 0),
+  };
+  let busy = false;
+  let timer;
+  const sameEmail = () => email.value.trim().toLowerCase() === state.mail.toLowerCase();
+  const showError = message => {
+    errorBox.textContent = message || '';
+    errorBox.hidden = !message;
+  };
+  const update = () => {
+    if (!root.isConnected) { window.clearInterval(timer); return; }
+    const matches = sameEmail();
+    const sent = matches && !!state.nonce;
+    const seconds = matches ? Math.max(0, Math.ceil((state.deadline - Date.now()) / 1000)) : 0;
+    sendButton.disabled = busy || seconds > 0;
+    if (!busy) sendButton.textContent = seconds > 0
+      ? sendButton.dataset.waitLabel.replace('{0}', seconds.toString())
+      : (sent ? sendButton.dataset.resendLabel : sendButton.dataset.getLabel);
+    email.readOnly = busy;
+    if (password) {
+      password.readOnly = busy;
+      passwordField.hidden = sent;
+    }
+    nonce.value = sent ? state.nonce : '';
+    verifyButton.disabled = busy || !sent || state.remaining <= 0;
+    hint.hidden = !sent;
+    attempts.hidden = !sent || state.remaining >= maxAttempts;
+    attempts.textContent = attempts.dataset.label.replace('{0}', state.remaining.toString());
+    if (state.deadline <= Date.now()) window.clearInterval(timer);
+  };
+  const startTimer = () => {
+    window.clearInterval(timer);
+    update();
+    if (state.deadline > Date.now()) timer = window.setInterval(update, 250);
+  };
+  const applyState = (data, justSent = false) => {
+    if (typeof data.hasCode !== 'boolean') return;
+    state = {
+      mail: data.mail || '', nonce: data.nonce || '', remaining: Number(data.remaining) || 0,
+      // A successful send starts a full cooldown after confirmation. Refreshes
+      // and verification errors keep the server's actual remaining duration.
+      deadline: Date.now() + (Number(justSent ? data.resendIntervalMs : data.retryAfterMs) || 0),
+    };
+    startTimer();
+  };
+  const errorMessage = data => {
+    if (typeof data.error === 'string') return data.error;
+    const value = data.error?.message;
+    // Hydro's native JSON errors contain a translation key and parameters.
+    const translated = window.LOCALES?.[value];
+    if (typeof translated !== 'string') return root.querySelector('[data-error-network]').textContent;
+    const labels = value.startsWith('Field ') ? { mail: 'Email', password: 'Current Password', __verificationCode: 'Email verification code' }
+      : value.startsWith('Too frequent operations of ') ? { send_mail: 'Verification email', email_verification: 'Email verification code' } : {};
+    return translated.replace(/\{(\d+)\}/g, (match, index) => {
+      const parameter = data.error.params?.[index];
+      return String(Object.hasOwn(labels, parameter) ? window.LOCALES[labels[parameter]] : parameter ?? match);
+    });
+  };
+  form.addEventListener('submit', async (event) => {
+    if (event.defaultPrevented) return;
+    event.preventDefault();
+    if (busy) return;
+    const sending = event.submitter === sendButton;
+    if (sending) {
+      if (sendButton.disabled || !email.reportValidity()) return;
+      if (password && (!state.nonce || !sameEmail()) && !password.value) {
+        showError(root.querySelector('[data-error-password]').textContent);
+        password.focus();
+        return;
+      }
+    } else {
+      if (!sameEmail() || !state.nonce) {
+        showError(root.querySelector('[data-error-send-first]').textContent);
+        return;
+      }
+      if (verifyButton.disabled || !form.reportValidity()) return;
+    }
+    showError('');
+    const body = new URLSearchParams(new FormData(form));
+    if (sending) {
+      body.set('action', 'send');
+      body.delete('__verificationCode');
+      code.value = '';
+    }
+    busy = true;
+    update();
+    if (sending) sendButton.textContent = sendButton.dataset.sendingLabel;
+    else verifyButton.textContent = verifyButton.dataset.busyLabel;
+    try {
+      const sendUrl = new URL(sendButton.getAttribute('formaction'), window.location.href).href;
+      // A control named "action" shadows form.action in real browsers.
+      const verifyUrl = new URL(form.getAttribute('action'), window.location.href).href;
+      const response = await window.fetch(sending ? sendUrl : verifyUrl, {
+        method: 'POST', credentials: 'same-origin', headers: { Accept: 'application/json' }, body,
+      });
+      const data = await response.json();
+      applyState(data, sending && response.ok && !data.error);
+      if (!response.ok || data.error) {
+        showError(errorMessage(data));
+        return;
+      }
+      if (data.url) {
+        window.location.assign(data.url);
+        return;
+      }
+      if (sending) {
+        email.value = data.mail;
+        if (password) password.value = '';
+      }
+    } catch (error) {
+      showError(root.querySelector('[data-error-network]').textContent);
+    } finally {
+      busy = false;
+      verifyButton.textContent = verifyButton.dataset.idleLabel;
+      startTimer();
+      if (sending && !verifyButton.disabled) code.focus();
+    }
+  });
+  email.addEventListener('input', () => { code.value = ''; showError(''); update(); });
+  code.addEventListener('keydown', (event) => {
+    if (event.key === 'Enter') {
+      event.preventDefault();
+      if (!verifyButton.disabled) form.requestSubmit(verifyButton);
+    }
+  });
+  window.addEventListener('pagehide', () => window.clearInterval(timer));
+  window.addEventListener('pageshow', (event) => {
+    if (event.persisted) { busy = false; verifyButton.textContent = verifyButton.dataset.idleLabel; }
+    startTimer();
+  });
+  document.addEventListener('visibilitychange', () => {
+    if (document.visibilityState === 'visible') startTimer();
+  });
+  startTimer();
+})();
+</script>

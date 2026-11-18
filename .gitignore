@@ -1,0 +1,11 @@
+# Plugin sources must remain trackable inside the Hydro workspace.
+!index.js
+!store.js
+!locales.js
+
+node_modules/
+.hydro-source/
+*.tgz
+coverage/
+.DS_Store
+*.log
