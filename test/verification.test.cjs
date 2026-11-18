@@ -105,6 +105,25 @@ test('three wrong attempts exhaust the code; another IP cannot reset the budget'
   await Promise.all(Array.from({ length: 20 }, () => consume(c, wrong)));
   assert.equal((await collection.findOne({ _id: c.session.id })).attempts, 3);
   assert.equal(await consume(c), null);
+  assert.equal(await store.get(c.session, domainId, purpose), null);
+  const revoked = await collection.findOne({ _id: c.session.id });
+  assert.equal(revoked.revoked, true);
+  assert.equal(revoked.digest, undefined);
+  assert.equal((await store.getRevoked(c.session, domainId, purpose)).nonce, c.nonce);
+  assert.equal(await store.getRevoked(c.session, 'other', purpose), null);
+  assert.equal(await store.getRevoked(c.session, domainId, 'lostpass'), null);
+});
+
+test('revocation preserves the resend lock, and stale revocation cannot affect a fresh code', async () => {
+  const old = await activate();
+  for (let i = 0; i < 3; i++) await consume(old, '');
+  await assert.rejects(store.issue(input()), VerificationError);
+  now = new Date(now.getTime() + RESEND_SECONDS * 1000);
+  const next = await activate();
+  await store.revoke(old.session, domainId, purpose, old.nonce);
+  assert.equal(await consume(old), null);
+  assert.equal(await store.getRevoked(next.session, domainId, purpose), null);
+  assert.ok(await consume(next));
 });
 
 test('the third attempt may succeed', async () => {
@@ -830,3 +849,117 @@ test('password and send-limit failures identify their own controls without consu
   assert.equal(p.sent.length, 0);
   assert.equal(await collection.countDocuments(), 0);
 });
+
+const exhaustedMessage = 'All verification attempts have been used. Please request a new code.';
+for (const purpose of ['register', 'lostpass', 'changemail']) {
+  for (const json of [true, false]) {
+    test(`${purpose}: three wrong attempts revoke the code and redirect ${json ? 'AJAX' : 'HTML'} to a fresh entry page`, async () => {
+      const p = await plugin(undefined, () => now);
+      if (purpose === 'lostpass') p.users.set('test@example.com', { _id: 42, uname: 'tester' });
+      const session = { sudo: Date.now() };
+      const sent = purpose === 'changemail' ? await sendChange(p, { session }) : await p.send(purpose, 'test@example.com', session, true);
+      const oldSession = { ...session, ['emailVerification_' + purpose]: { ...session['emailVerification_' + purpose] } };
+      const code = p.sent[0][2].match(/\b[0-9]{6}\b/)[0];
+      const wrong = code === '999999' ? '000000' : '999999';
+      let last;
+      for (let i = 0; i < 3; i++) {
+        const h = p.handler(purpose, session, { mail: sent.response.body.mail, __challenge: sent.response.body.nonce, __verificationCode: wrong });
+        h.request.json = json;
+        await h.post();
+        if (i < 2) {
+          assert.equal(h.response.status, 400);
+          assert.equal(h.response.body.remaining, 2 - i);
+          assert.equal(h.response.redirect, undefined);
+        }
+        last = h;
+      }
+      const entry = purpose === 'register' ? 'user_register' : purpose === 'lostpass' ? 'user_lostpass' : 'verification_changemail';
+      assert.equal(last.response.redirect, '/' + entry);
+      assert.equal(last.response.status, json ? 200 : 303);
+      assert.equal(last.response.body.resetVerification, true);
+      assert.equal(last.response.body.hasCode, false);
+      assert.equal(session['emailVerification_' + purpose], null);
+      const raw = await collection.findOne({ purpose });
+      assert.equal(raw.revoked, true);
+      assert.equal(raw.digest, undefined);
+      const old = p.handler(purpose, oldSession, { mail: raw.mail, __challenge: raw.nonce, __verificationCode: code });
+      old.request.json = true;
+      await old.post();
+      assert.equal(old.response.redirect, '/' + entry);
+      assert.equal(p.tokens.length, 0);
+      const page = p.handler(purpose, session);
+      if (purpose !== 'changemail') p.hooks.get(`handler/before/${purpose === 'register' ? 'UserRegister' : 'UserLostPass'}#get`)(page);
+      await page.get();
+      assert.equal(page.response.body.hasCode, false);
+      assert.equal(page.response.body.mail, raw.mail);
+      assert.equal(page.response.body.error, exhaustedMessage);
+      assert.equal(page.response.body.errorField, 'send');
+      assert.equal(page.response.body.retryAfterMs, 30000);
+      assert.equal(p.sent.length, 1);
+      if (purpose === 'changemail') {
+        const missingPassword = await sendChange(p, { session, password: '' });
+        assert.equal(missingPassword.response.status, 400);
+      }
+      const cooling = purpose === 'changemail' ? await sendChange(p, { session }) : await p.send(purpose, raw.mail, session, true);
+      assert.equal(cooling.response.status, 400);
+      assert.equal(cooling.response.body.hasCode, false);
+      assert.equal(cooling.response.body.retryAfterMs, 30000);
+      assert.equal(p.sent.length, 1);
+      now = new Date(now.getTime() + 30000);
+      const next = purpose === 'changemail' ? await sendChange(p, { session }) : await p.send(purpose, raw.mail, session, true);
+      assert.equal(next.response.body.remaining, 3);
+      assert.equal(next.response.body.hasCode, true);
+      assert.equal(next.response.body.error, undefined);
+      assert.equal(session['emailVerificationReset_' + purpose], null);
+      assert.equal(p.sent.length, 2);
+      assert.notEqual(next.response.body.nonce, raw.nonce);
+    });
+  }
+}
+
+test('exhausting registration does not revoke recovery or email-change challenges in the same session', async () => {
+  const p = await plugin();
+  p.users.set('recover@example.com', { _id: 42, uname: 'tester' });
+  const session = { sudo: Date.now() };
+  const registration = await p.send('register', 'signup@example.com', session, true);
+  const recovery = await p.send('lostpass', 'recover@example.com', session, true);
+  const change = await sendChange(p, { session });
+  const recoverySession = session.emailVerification_lostpass;
+  const changeSession = session.emailVerification_changemail;
+  const code = p.sent[0][2].match(/\b[0-9]{6}\b/)[0];
+  for (let i = 0; i < 3; i++) {
+    const h = p.handler('register', session, { mail: registration.response.body.mail, __challenge: registration.response.body.nonce, __verificationCode: code === '999999' ? '000000' : '999999' });
+    h.request.json = true;
+    await h.post();
+  }
+  assert.equal(session.emailVerification_lostpass, recoverySession);
+  assert.equal(session.emailVerification_changemail, changeSession);
+  const lost = p.handler('lostpass', session, { mail: recovery.response.body.mail, __challenge: recovery.response.body.nonce, __verificationCode: p.sent[1][2].match(/\b[0-9]{6}\b/)[0] });
+  await lost.post();
+  const changed = confirmChange(p, change);
+  await changed.post();
+  assert.deepEqual(p.tokens.map(token => token.type), [5, 3]);
+});
+
+for (const language of ['en', 'zh', 'zh_TW', 'ko']) {
+  test(`${language}: exhaustion notice survives redirect and refresh in the selected language`, async () => {
+    const native = require('./helpers/native-i18n.cjs')();
+    const dictionary = require('../locales/' + language + '.json');
+    const p = await plugin(key => native.translate(key, [language, 'zh']));
+    const session = {};
+    const sent = await p.send('register', 'test@example.com', session, true);
+    const code = p.sent[0][2].match(/\b[0-9]{6}\b/)[0];
+    for (let i = 0; i < 3; i++) {
+      const h = p.handler('register', session, { __challenge: sent.response.body.nonce, __verificationCode: code === '999999' ? '000000' : '999999' });
+      h.request.json = true;
+      await h.post();
+    }
+    for (let i = 0; i < 2; i++) {
+      const page = p.handler('register', session);
+      p.hooks.get('handler/before/UserRegister#get')(page);
+      await page.get();
+      assert.equal(page.response.body.error, dictionary[exhaustedMessage]);
+      assert.equal(page.response.body.hasCode, false);
+    }
+  });
+}

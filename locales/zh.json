@@ -60,5 +60,6 @@
   "You're not logged in.": "您尚未登录。",
   "Verification email": "验证邮件",
   "Enter your email address.": "请输入邮箱地址。",
-  "Enter a valid email address.": "请输入有效的邮箱地址。"
+  "Enter a valid email address.": "请输入有效的邮箱地址。",
+  "All verification attempts have been used. Please request a new code.": "验证次数已用完，请重新获取验证码。"
 }

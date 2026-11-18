@@ -60,5 +60,6 @@
   "You're not logged in.": "您尚未登入。",
   "Verification email": "驗證郵件",
   "Enter your email address.": "請輸入電子郵件地址。",
-  "Enter a valid email address.": "請輸入有效的電子郵件地址。"
+  "Enter a valid email address.": "請輸入有效的電子郵件地址。",
+  "All verification attempts have been used. Please request a new code.": "驗證次數已用完，請重新取得驗證碼。"
 }

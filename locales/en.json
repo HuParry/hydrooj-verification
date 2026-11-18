@@ -60,5 +60,6 @@
   "You're not logged in.": "You're not logged in.",
   "Verification email": "Verification email",
   "Enter your email address.": "Enter your email address.",
-  "Enter a valid email address.": "Enter a valid email address."
+  "Enter a valid email address.": "Enter a valid email address.",
+  "All verification attempts have been used. Please request a new code.": "All verification attempts have been used. Please request a new code."
 }

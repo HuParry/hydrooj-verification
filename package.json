@@ -1,6 +1,6 @@
 {
   "name": "hydrooj-verification",
-  "version": "1.4.1",
+  "version": "1.4.2",
   "description": "Six-digit email verification codes for Hydro OJ registration, password recovery and email changes",
   "main": "index.js",
   "type": "commonjs",

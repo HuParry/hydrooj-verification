@@ -12,6 +12,8 @@ const FLOWS = {
   changemail: { title: 'Change Email', entry: 'verification_changemail', next: 'user_changemail_with_code', log: 'user.changemail' },
 };
 const sessionKey = purpose => `emailVerification_${purpose}`;
+const resetKey = purpose => `emailVerificationReset_${purpose}`;
+const EXHAUSTED_MESSAGE = 'All verification attempts have been used. Please request a new code.';
 const enabled = purpose => purpose !== 'register' || !!SystemModel.get('smtp.verify');
 
 function withSudo(method) {
@@ -36,8 +38,36 @@ exports.apply = async (ctx) => {
     return purpose !== 'changemail' || ownsChange(handler, doc) ? doc : null;
   }
 
+  function resetNotice(handler, purpose) {
+    const notice = handler.session[resetKey(purpose)];
+    if (!notice || notice.expireAt <= Date.now() || (purpose === 'changemail' && !ownsChange(handler, notice))) return null;
+    return notice;
+  }
+
+  async function redirectExhausted(handler, purpose, session, nonce) {
+    const doc = await store.getRevoked(session, handler.args.domainId, purpose);
+    if (!doc || (nonce !== undefined && doc.nonce !== nonce) || (purpose === 'changemail' && !ownsChange(handler, doc))) return false;
+    const currentSession = handler.session[sessionKey(purpose)];
+    if (currentSession?.id !== session.id || currentSession?.secret !== session.secret) return false;
+    handler.session[resetKey(purpose)] = {
+      mail: doc.mail, resendAt: doc.resendAt.getTime(), expireAt: doc.expireAt.getTime(),
+      uid: doc.uid, sourceMail: doc.sourceMail, authorizerUid: doc.authorizerUid,
+    };
+    handler.session[sessionKey(purpose)] = null;
+    const url = handler.url(FLOWS[purpose].entry);
+    handler.response.body = {
+      url, resetVerification: true, hasCode: false, mail: doc.mail, nonce: '', remaining: 0,
+      retryAfterMs: Math.max(0, doc.resendAt.getTime() - Date.now()),
+    };
+    handler.response.status = handler.request.json ? 200 : 303;
+    handler.response.redirect = url;
+    return true;
+  }
+
   function show(handler, purpose, doc, error, errorField = 'code') {
-    const retryAfterMs = doc ? Math.max(0, doc.resendAt.getTime() - Date.now()) : 0;
+    const notice = doc ? null : resetNotice(handler, purpose);
+    const retryAfterMs = Math.max(0, (doc?.resendAt.getTime() || notice?.resendAt || 0) - Date.now());
+    if (!error && notice) { error = EXHAUSTED_MESSAGE; errorField = 'send'; }
     handler.response.template = 'verification_code.html';
     handler.response.body = {
       title: FLOWS[purpose].title,
@@ -50,7 +80,7 @@ exports.apply = async (ctx) => {
       emailLabel: purpose === 'changemail' ? 'New Email' : 'Email',
       passwordLabel: handler.session.sudoUid ? "SuperUser's Password" : 'Current Password',
       backRoute: purpose === 'changemail' ? 'home_security' : null,
-      mail: doc?.mail,
+      mail: doc?.mail || notice?.mail,
       nonce: doc?.nonce,
       remaining: doc ? Math.max(0, MAX_ATTEMPTS - doc.attempts) : 0,
       retryAfter: Math.ceil(retryAfterMs / 1000),
@@ -89,7 +119,14 @@ exports.apply = async (ctx) => {
     });
     const doc = await pending(handler, purpose);
     show(handler, purpose, doc, translated, errorField);
-    if (!doc && typeof handler.request.body.mail === 'string') handler.response.body.mail = handler.request.body.mail.trim().slice(0, 254);
+    if (!doc && typeof handler.request.body.mail === 'string') {
+      const mail = handler.request.body.mail.trim().slice(0, 254);
+      if (handler.response.body.mail?.toLowerCase() !== mail.toLowerCase()) {
+        handler.response.body.retryAfter = 0;
+        handler.response.body.retryAfterMs = 0;
+      }
+      handler.response.body.mail = mail;
+    }
     handler.response.status = error.code || 400;
   }
 
@@ -147,6 +184,7 @@ exports.apply = async (ctx) => {
         throw new VerificationError('This verification request has expired. Please request a new code.');
       }
       handler.session[sessionKey(purpose)] = challenge.session;
+      handler.session[resetKey(purpose)] = null;
     } catch (error) {
       await store.cancel(challenge.session, handler.args.domainId, purpose);
       throw error;
@@ -162,6 +200,7 @@ exports.apply = async (ctx) => {
       ctx.on(`handler/before/${flow.handler}#get`, (handler) => {
         if (!enabled(purpose) || (purpose === 'lostpass' && !SystemModel.get('smtp.user'))) return;
         handler.get = async function () {
+          if (await redirectExhausted(this, purpose, this.session[sessionKey(purpose)])) return;
           const doc = await pending(this, purpose);
           show(this, purpose, doc);
         };
@@ -192,8 +231,9 @@ exports.apply = async (ctx) => {
       }
 
       async get() {
+        if (await redirectExhausted(this, purpose, this.session[sessionKey(purpose)])) return;
         const doc = await pending(this, purpose);
-        show(this, purpose, doc, doc || purpose === 'changemail' ? undefined : 'This verification request has expired. Please request a new code.');
+        show(this, purpose, doc, doc || resetNotice(this, purpose) || purpose === 'changemail' ? undefined : 'This verification request has expired. Please request a new code.');
       }
 
       async post() {
@@ -208,6 +248,7 @@ exports.apply = async (ctx) => {
         }
         const session = this.session[sessionKey(purpose)];
         const doc = await pending(this, purpose);
+        if (!doc && await redirectExhausted(this, purpose, session, this.request.body.__challenge)) return;
         if (!doc || this.request.body.__challenge !== doc.nonce) {
           show(this, purpose, doc, 'This verification request has expired. Please request a new code.');
           this.response.status = 400;
@@ -233,6 +274,7 @@ exports.apply = async (ctx) => {
         await this.limitRate('email_verification', 60, 30);
         const verified = await store.consume(session, this.args.domainId, purpose, doc.nonce, this.request.body.__verificationCode);
         if (!verified) {
+          if (await redirectExhausted(this, purpose, session, doc.nonce)) return;
           const current = await pending(this, purpose);
           show(this, purpose, current, 'The verification code is incorrect, expired, or has reached the attempt limit.');
           this.response.status = 400;

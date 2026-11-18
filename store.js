@@ -37,6 +37,7 @@ class VerificationStore {
       digest: digest(secret, code),
       attempts: 0,
       active: false,
+      revoked: false,
       expireAt: new Date(now.getTime() + EXPIRE_SECONDS * 1000),
       resendAt: new Date(now.getTime() + RESEND_SECONDS * 1000),
     };
@@ -84,8 +85,28 @@ class VerificationStore {
     const filter = this.filter(session, domainId, purpose);
     if (!filter) return null;
     return this.collection.findOne(
-      { ...filter, active: true, expireAt: { $gt: this.now() } },
+      { ...filter, active: true, revoked: { $ne: true }, expireAt: { $gt: this.now() } },
       { projection: { digest: 0, binding: 0 } },
+    );
+  }
+
+  async getRevoked(session, domainId, purpose) {
+    const filter = this.filter(session, domainId, purpose);
+    if (!filter) return null;
+    return this.collection.findOne(
+      { ...filter, revoked: true, expireAt: { $gt: this.now() } },
+      { projection: { digest: 0, binding: 0 } },
+    );
+  }
+
+  async revoke(session, domainId, purpose, nonce) {
+    const filter = this.filter(session, domainId, purpose);
+    if (!filter) return;
+    // Keep only the cooldown/ownership record. The old code has no digest left
+    // to verify, and cleanup from an old form cannot revoke a replacement.
+    await this.collection.updateOne(
+      { ...filter, nonce, active: true, attempts: { $gte: MAX_ATTEMPTS } },
+      { $set: { revoked: true }, $unset: { digest: '' } },
     );
   }
 
@@ -93,15 +114,20 @@ class VerificationStore {
     const filter = this.filter(session, domainId, purpose);
     if (!filter || typeof nonce !== 'string' || !/^[a-f0-9]{32}$/.test(nonce)) return null;
     // Reserve an attempt before checking. Parallel requests cannot exceed the budget.
-    const live = { ...filter, nonce, active: true, expireAt: { $gt: this.now() }, attempts: { $lt: MAX_ATTEMPTS } };
+    const live = { ...filter, nonce, active: true, revoked: { $ne: true }, expireAt: { $gt: this.now() }, attempts: { $lt: MAX_ATTEMPTS } };
     const doc = await this.collection.findOneAndUpdate(live, { $inc: { attempts: 1 } }, { returnDocument: 'before' });
-    if (!doc || typeof code !== 'string' || !CODE_PATTERN.test(code)) return null;
+    if (!doc) return null;
+    const reject = async () => {
+      if (doc.attempts + 1 >= MAX_ATTEMPTS) await this.revoke(session, domainId, purpose, nonce);
+      return null;
+    };
+    if (typeof code !== 'string' || !CODE_PATTERN.test(code)) return reject();
     const expected = Buffer.from(doc.digest, 'hex');
     const actual = Buffer.from(digest(session.secret, code), 'hex');
-    if (!timingSafeEqual(expected, actual)) return null;
+    if (!timingSafeEqual(expected, actual)) return reject();
     // One successful request wins, even across multiple Hydro processes.
     return this.collection.findOneAndDelete({
-      ...filter, nonce, active: true, expireAt: { $gt: this.now() }, attempts: { $lte: MAX_ATTEMPTS },
+      ...filter, nonce, active: true, revoked: { $ne: true }, expireAt: { $gt: this.now() }, attempts: { $lte: MAX_ATTEMPTS },
     });
   }
 }

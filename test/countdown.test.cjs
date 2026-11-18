@@ -367,16 +367,22 @@ test('the server-rendered form works without JavaScript and contains no removed 
   } finally { dom.window.close(); }
 });
 
-test('exhausting three attempts locks verification while the code input stays editable', async () => {
+test('exhaustion resets the form state before redirecting and cannot restore the old code from back-cache', async () => {
   const page = browser(1000);
   try {
     page.code.value = '000000';
-    page.reply({ ...sent({ remaining: 0, retryAfterMs: 1000 }), errorField: 'code', error: '验证码已达到尝试次数上限。' }, false);
+    page.reply({ url: '#restart', resetVerification: true, hasCode: false, mail: 'test@example.com', nonce: '', remaining: 0, retryAfterMs: 1000 });
     page.submit(page.verify);
     await flush();
+    assert.equal(page.dom.window.location.hash, '#restart');
     assert.equal(page.verify.disabled, true);
     assert.equal(page.code.disabled, false);
-    assert.equal(page.dom.window.document.querySelector('[data-attempts]').textContent, '剩余尝试次数：0');
+    assert.equal(page.code.value, '');
+    assert.equal(page.form.elements.namedItem('__challenge').value, '');
+    assert.equal(page.hint.hidden, true);
+    page.dom.window.dispatchEvent(new page.dom.window.PageTransitionEvent('pageshow', { persisted: true }));
+    assert.equal(page.verify.disabled, true);
+    assert.equal(page.form.elements.namedItem('__challenge').value, '');
     page.tick(1000);
     page.reply(sent());
     page.submit(page.button);
